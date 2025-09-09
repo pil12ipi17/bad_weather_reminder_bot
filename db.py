@@ -98,6 +98,5 @@ def save_weather_sample(tg_id, date, temp, temp_max, temp_min, condition, precip
         conn.close()
 
 
-# Небольшой тест
 if __name__ == "__main__":
     init_db()

@@ -58,7 +58,6 @@ def save_city(message):
     tg_id = message.from_user.id
     city_name = message.text.strip()
 
-    # Простейший геокодинг через OpenWeatherMap
     url = "http://api.openweathermap.org/geo/1.0/direct"
     params = {"q": city_name, "limit": 1, "appid": WEATHER_API_KEY}
     try:
@@ -72,7 +71,7 @@ def save_city(message):
         db.update_city(tg_id, city_info['name'], city_info['lat'], city_info['lon'])
         bot.send_message(chat_id, f"Город успешно сохранён: {city_info['name']} ✅")
 
-        # 🔹 Сразу проверяем погоду и отправляем уведомление
+        # Сразу проверяем погоду и отправляем уведомление
         try:
             w = get_weather(city_info['lat'], city_info['lon'])
             today_str = datetime.datetime.utcnow().strftime("%Y-%m-%d")
@@ -109,7 +108,6 @@ def reply_buttons(message):
     elif text == "Моя аналитика":
         bot.send_message(chat_id, "Пока аналитика не готова, будет позже 📊")
     else:
-        # Можно сделать обработку как нового города
         save_city(message)
 
 
@@ -123,14 +121,13 @@ def send_daily_notifications(bot):
 
     for u in users:
         if u['notify_morning'] != 1:
-            continue  # пропускаем тех, кто отключил уведомления
+            continue
 
-        # чтобы не слать дважды за день
         if u['last_notify_date'] == today_str:
             continue
 
         if not u['city'] or not u['lat'] or not u['lon']:
-            continue  # город не выбран
+            continue
 
         try:
             w = get_weather(u['lat'], u['lon'])
@@ -156,7 +153,7 @@ def run_scheduled_notifications():
 
     while True:
         schedule.run_pending()
-        time.sleep(30)  # проверяем каждые 30 секунд
+        time.sleep(30)  
 
 # -------------------- Запуск бота --------------------
 if __name__ == "__main__":
