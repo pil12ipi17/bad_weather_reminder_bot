@@ -9,6 +9,11 @@ from weather import get_weather
 import schedule
 import time
 import threading
+from timezonefinder import TimezoneFinder
+import datetime
+import pytz
+
+
 
 # -------------------- Загрузка токенов --------------------
 load_dotenv()
@@ -68,8 +73,25 @@ def save_city(message):
             bot.send_message(chat_id, "Город не найден 😢 Попробуй ещё раз.")
             return
         city_info = data[0]
-        db.update_city(tg_id, city_info['name'], city_info['lat'], city_info['lon'])
-        bot.send_message(chat_id, f"Город успешно сохранён: {city_info['name']} ✅")
+        lat = city_info['lat']
+        lon = city_info['lon']
+        city_name = city_info['name']
+
+        # Определяем таймзону
+        tf = TimezoneFinder()
+        timezone_str = tf.timezone_at(lat=lat, lng=lon)
+
+        # Считаем смещение UTC
+        tz_offset = None
+        if timezone_str:
+            tz = pytz.timezone(timezone_str)
+            tz_offset = int(tz.utcoffset(datetime.datetime.utcnow()).total_seconds() / 3600)
+
+        # Сохраняем в базу
+        db.update_city(tg_id, city_name, lat, lon, timezone_str, tz_offset)
+
+        bot.send_message(chat_id, f"Город успешно сохранён: {city_name} ✅\n"
+                                  f"Таймзона: {timezone_str}, UTC{tz_offset:+d}")
 
         # Сразу проверяем погоду и отправляем уведомление
         try:
@@ -111,42 +133,39 @@ def reply_buttons(message):
         save_city(message)
 
 
-def send_daily_notifications(bot):
-    """
-    Проходим по всем пользователям и отправляем уведомления
-    если дождь/снег/жара > 25°C
-    """
-    today_str = datetime.datetime.utcnow().strftime("%Y-%m-%d")
+def send_daily_notifications():
     users = db.get_all_users()
+    now_utc = datetime.now(timezone.utc)
 
-    for u in users:
-        if u['notify_morning'] != 1:
+    for user in users:
+        tg_id, city, lat, lon, tz_offset = user
+
+        if not city or not lat or not lon or tz_offset is None:
             continue
 
-        if u['last_notify_date'] == today_str:
-            continue
+        # Локальное время пользователя
+        user_time = now_utc + timedelta(hours=tz_offset)
 
-        if not u['city'] or not u['lat'] or not u['lon']:
-            continue
+        # Если сейчас у пользователя 08:00 (± 5 минут для надёжности)
+        if user_time.hour == 8 and user_time.minute < 5:
+            try:
+                weather = get_weather(lat, lon)
+                notify = False
+                message = f"Погода в {city} сегодня:\n"
 
-        try:
-            w = get_weather(u['lat'], u['lon'])
-            db.save_weather_sample(u['tg_id'], today_str,
-                                   w['temp'], w['temp_max'], w['temp_min'],
-                                   w['condition'], w['precipitation_type'],
-                                   w['pop'], w['raw_json'])
+                if weather["precipitation_type"] in ["rain", "snow"]:
+                    notify = True
+                    message += f"❗ Ожидаются осадки: {weather['precipitation_type']}\n"
 
-            send_msg = None
-            if w['precipitation_type'] in ["rain", "snow"]:
-                send_msg = f"Прогноз на сегодня в {u['city']}: {w['condition']} 🌧❄️"
-            elif w['temp_max'] >= 25:
-                send_msg = f"Сегодня в {u['city']} жарко 🔥 {w['temp_max']}°C"
+                if weather["temp_max"] > 25:
+                    notify = True
+                    message += f"🔥 Жара: до {weather['temp_max']}°C\n"
 
-            if send_msg:
-                bot.send_message(u['chat_id'], send_msg)
-                db.update_last_notify_date(u['tg_id'], today_str)
-        except Exception as e:
-            print(f"Ошибка при отправке уведомления для {u['tg_id']}: {e}")
+                if notify:
+                    bot.send_message(tg_id, message)
+
+            except Exception as e:
+                print(f"Ошибка при отправке уведомления пользователю {tg_id}: {e}")
 
 def run_scheduled_notifications():
     schedule.every().day.at("08:00").do(send_daily_notifications, bot=bot)
