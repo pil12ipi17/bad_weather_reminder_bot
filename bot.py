@@ -33,8 +33,9 @@ def start(message):
 
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     btn_city = types.KeyboardButton("Выбрать город")
+    btn_weather_today = types.KeyboardButton("Какая сегодня погода?")
     btn_analytics = types.KeyboardButton("Моя аналитика")
-    markup.add(btn_city, btn_analytics)
+    markup.add(btn_city, btn_weather_today, btn_analytics)
 
     bot.send_message(chat_id,
                      "Привет! Я бот-погодник 🌤\nВыбери действие ниже или напиши город вручную:",
@@ -124,11 +125,46 @@ def save_city(message):
 def reply_buttons(message):
     text = message.text
     chat_id = message.chat.id
+    tg_id = message.from_user.id
 
     if text == "Выбрать город":
         setcity(message)
+
+    elif text == "Какая сегодня погода?":
+        user = db.get_user_by_tg_id(tg_id)
+        if user and user["lat"] and user["lon"]:
+            try:
+                weather = get_weather(user["lat"], user["lon"])
+                today_str = datetime.datetime.utcnow().strftime("%Y-%m-%d")
+
+                msg = (f"Погода сегодня в {user['city']}:\n"
+                       f"{weather['condition']} 🌤\n"
+                       f"Температура: {weather['temp']}°C "
+                       f"(min {weather['temp_min']}°C, max {weather['temp_max']}°C)")
+
+                bot.send_message(chat_id, msg)
+
+                # Сохраняем прогноз в БД даже без уведомлений
+                db.save_weather_sample(
+                    tg_id,
+                    today_str,
+                    weather["temp"],
+                    weather["temp_max"],
+                    weather["temp_min"],
+                    weather["condition"],
+                    weather["precipitation_type"],
+                    weather["pop"],
+                    weather["raw_json"]
+                )
+
+            except Exception as e:
+                bot.send_message(chat_id, f"Ошибка при получении погоды: {e}")
+        else:
+            bot.send_message(chat_id, "Сначала выбери город через кнопку 'Выбрать город'.")
+
     elif text == "Моя аналитика":
         bot.send_message(chat_id, "Пока аналитика не готова, будет позже 📊")
+
     else:
         save_city(message)
 
@@ -146,10 +182,12 @@ def send_daily_notifications():
         # Локальное время пользователя
         user_time = now_utc + timedelta(hours=tz_offset)
 
-        # Если сейчас у пользователя 08:00 (± 5 минут для надёжности)
+        # Проверяем: у пользователя сейчас утро (08:00 ± 5 минут)
         if user_time.hour == 8 and user_time.minute < 5:
             try:
                 weather = get_weather(lat, lon)
+                today_str = now_utc.strftime("%Y-%m-%d")
+
                 notify = False
                 message = f"Погода в {city} сегодня:\n"
 
@@ -164,6 +202,20 @@ def send_daily_notifications():
                 if notify:
                     bot.send_message(tg_id, message)
 
+                    # Сохраняем прогноз в БД (важно для аналитики)
+                    db.save_weather_sample(
+                        tg_id,
+                        today_str,
+                        weather["temp"],
+                        weather["temp_max"],
+                        weather["temp_min"],
+                        weather["condition"],
+                        weather["precipitation_type"],
+                        weather["pop"],
+                        weather["raw_json"]
+                    )
+                    db.update_last_notify_date(tg_id, today_str)
+
             except Exception as e:
                 print(f"Ошибка при отправке уведомления пользователю {tg_id}: {e}")
 
@@ -172,7 +224,7 @@ def run_scheduled_notifications():
 
     while True:
         schedule.run_pending()
-        time.sleep(30)  
+        time.sleep(30)
 
 # -------------------- Запуск бота --------------------
 if __name__ == "__main__":
@@ -182,4 +234,3 @@ if __name__ == "__main__":
     threading.Thread(target=run_scheduled_notifications, daemon=True).start()
 
     bot.infinity_polling()
-

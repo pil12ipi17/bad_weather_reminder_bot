@@ -18,11 +18,13 @@ def get_weather(lat, lon):
     temp_max = data["main"]["temp_max"]
     condition = data["weather"][0]["main"]
 
-    precipitation_type = "none"
-    if "rain" in condition.lower():
+    condition_lower = condition.lower()
+    if "rain" in condition_lower or "drizzle" in condition_lower:
         precipitation_type = "rain"
-    elif "snow" in condition.lower():
+    elif "snow" in condition_lower:
         precipitation_type = "snow"
+    else:
+        precipitation_type = "none"
 
     return {
         "temp": temp,
@@ -33,4 +35,3 @@ def get_weather(lat, lon):
         "pop": 0,
         "raw_json": str(data)
     }
-

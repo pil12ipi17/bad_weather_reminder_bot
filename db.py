@@ -97,6 +97,19 @@ def save_weather_sample(tg_id, date, temp, temp_max, temp_min, condition, precip
     finally:
         conn.close()
 
+def get_user_by_tg_id(tg_id):
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row  # чтобы возвращать словарь
+    c = conn.cursor()
+
+    c.execute("SELECT * FROM users WHERE tg_id = ?", (tg_id,))
+    row = c.fetchone()
+
+    conn.close()
+
+    if row:
+        return dict(row)
+    return None
 
 if __name__ == "__main__":
     init_db()
