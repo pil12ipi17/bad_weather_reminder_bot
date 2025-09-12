@@ -1,5 +1,9 @@
 import sqlite3
 import os
+import datetime
+import matplotlib
+matplotlib.use('Agg')  # отключает Tkinter и GUI
+import matplotlib.pyplot as plt
 
 DB_NAME = "weather_bot.db"
 
@@ -110,6 +114,47 @@ def get_user_by_tg_id(tg_id):
     if row:
         return dict(row)
     return None
+
+def get_weather_counts(tg_id, city, period):
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+
+    today = datetime.date.today()
+    if period == "-7 days":
+        start_date = today - datetime.timedelta(days=7)
+    elif period == "-1 month":
+        start_date = today - datetime.timedelta(days=30)
+    elif period == "-3 months":
+        start_date = today - datetime.timedelta(days=90)
+
+    c.execute("""
+        SELECT ws.condition, COUNT(*)
+        FROM weather_samples ws
+        JOIN users u ON ws.tg_id = u.tg_id
+        WHERE ws.tg_id = ? AND u.city = ? AND ws.date BETWEEN ? AND ?
+        GROUP BY ws.condition
+    """, (tg_id, city, str(start_date), str(today)))
+
+    result = c.fetchall()
+    conn.close()
+    return result
+
+def plot_weather_pie(data, username="user", city="Unknown", period="30 дней"):
+    if not data:
+        return None
+
+    conditions, counts = zip(*data)
+
+    plt.figure(figsize=(6,6))
+    plt.pie(counts, labels=conditions, autopct="%1.1f%%", startangle=140)
+    plt.title(f"Погода в {city}\nза {period}")
+    plt.tight_layout()
+
+    file_path = f"{username}_{city}_weather_pie.png"
+    plt.savefig(file_path, dpi=100, bbox_inches="tight")
+    plt.close()
+    return file_path
+
 
 if __name__ == "__main__":
     init_db()

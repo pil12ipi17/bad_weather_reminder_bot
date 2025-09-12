@@ -4,7 +4,6 @@ from telebot import types
 from dotenv import load_dotenv
 import db
 import requests
-import datetime
 from weather import get_weather
 import schedule
 import time
@@ -12,8 +11,7 @@ import threading
 from timezonefinder import TimezoneFinder
 import datetime
 import pytz
-
-
+from sheets import append_rows_to_sheet
 
 # -------------------- Загрузка токенов --------------------
 load_dotenv()
@@ -162,11 +160,32 @@ def reply_buttons(message):
         else:
             bot.send_message(chat_id, "Сначала выбери город через кнопку 'Выбрать город'.")
 
+
     elif text == "Моя аналитика":
-        bot.send_message(chat_id, "Пока аналитика не готова, будет позже 📊")
+        show_analytics_period(message)
 
     else:
         save_city(message)
+
+
+def show_analytics_period(message):
+    markup = types.InlineKeyboardMarkup(row_width=2)
+    # Периоды аналитики
+    markup.add(
+        types.InlineKeyboardButton("Неделя", callback_data="analytics_week"),
+        types.InlineKeyboardButton("Месяц", callback_data="analytics_month"),
+        types.InlineKeyboardButton("Квартал", callback_data="analytics_quarter")
+    )
+    # Кнопка экспорта
+    markup.add(
+        types.InlineKeyboardButton("Экспорт в Google Sheets", callback_data="export_sheets")
+    )
+
+    bot.send_message(
+        message.chat.id,
+        "Выберите период для аналитики или экспортируйте данные:",
+        reply_markup=markup
+    )
 
 
 def send_daily_notifications():
@@ -174,7 +193,11 @@ def send_daily_notifications():
     now_utc = datetime.now(timezone.utc)
 
     for user in users:
-        tg_id, city, lat, lon, tz_offset = user
+        tg_id = user["tg_id"]
+        city = user["city"]
+        lat = user["lat"]
+        lon = user["lon"]
+        tz_offset = user["tz_offset"]
 
         if not city or not lat or not lon or tz_offset is None:
             continue
@@ -226,6 +249,77 @@ def run_scheduled_notifications():
         schedule.run_pending()
         time.sleep(30)
 
+@bot.callback_query_handler(func=lambda call: call.data.startswith("analytics_"))
+def handle_analytics_callback(call):
+    tg_id = call.from_user.id
+    user = db.get_user_by_tg_id(tg_id)
+
+    if not user or not user.get("city"):
+        bot.send_message(call.message.chat.id, "Сначала выберите город через кнопку 'Выбрать город'.")
+        return
+
+    # Определяем период
+    period_map = {
+        "week": "-7 days",
+        "month": "-1 month",
+        "quarter": "-3 months"
+    }
+    period_name_map = {
+        "week": "7 дней",
+        "month": "30 дней",
+        "quarter": "90 дней"
+    }
+
+    period_key = call.data.split("_")[1]
+    period = period_map.get(period_key, "-1 month")
+    period_name = period_name_map.get(period_key, "30 дней")
+
+    # Получаем данные
+    data = db.get_weather_counts(tg_id, user["city"], period)
+
+    if not data:
+        bot.send_message(call.message.chat.id, f"Нет данных по городу {user['city']} за {period_name}.")
+        return
+
+    # --- Текстовая статистика ---
+    total = sum(count for _, count in data)
+    text = f"📊 Аналитика погоды для *{user['city']}* за {period_name}:\n\n"
+    for condition, count in data:
+        percent = round(count / total * 100, 1)
+        text += f"- {condition}: {count} дней ({percent}%)\n"
+
+    bot.send_message(call.message.chat.id, text, parse_mode="Markdown")
+
+    # --- Диаграмма ---
+    file_path = db.plot_weather_pie(data, username=str(tg_id), city=user["city"], period=period_name)
+    if file_path:
+        with open(file_path, "rb") as f:
+            bot.send_photo(call.message.chat.id, f)
+
+def export_weather_to_sheets(tg_id, period="-1 month"):
+    user = db.get_user_by_tg_id(tg_id)
+    if not user or not user.get("city"):
+        return "Сначала выберите город"
+
+    city = user["city"]
+    data = db.get_weather_counts(tg_id, city, period)
+    if not data:
+        return "Нет данных для экспорта"
+
+    today_str = datetime.today().strftime("%Y-%m-%d")
+    rows = []
+    for condition, count in data:
+        rows.append([tg_id, city, today_str, condition, count])
+
+    append_rows_to_sheet(rows)
+    return f"Экспорт завершён. Добавлено {len(rows)} строк"
+
+@bot.callback_query_handler(func=lambda call: call.data == "export_sheets")
+def handle_export(call):
+    from sheets import export_weather_to_sheets  # функция из google_sheets.py
+    result = export_weather_to_sheets(call.from_user.id, "-1 month")
+    bot.send_message(call.message.chat.id, result)
+
 # -------------------- Запуск бота --------------------
 if __name__ == "__main__":
     db.init_db()
@@ -233,4 +327,5 @@ if __name__ == "__main__":
 
     threading.Thread(target=run_scheduled_notifications, daemon=True).start()
 
-    bot.infinity_polling()
+    bot.infinity_polling(timeout=60, long_polling_timeout=20)
+
